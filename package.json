@@ -1,0 +1,28 @@
+{
+  "name": "ludo-backend",
+  "version": "1.0.0",
+  "description": "Best LUDO game",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/itsMatoosh/ludo-backend.git"
+  },
+  "keywords": [
+    "ludo",
+    "board",
+    "game",
+    "game"
+  ],
+  "author": "itsMatoosh & jeaniecho",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/itsMatoosh/ludo-backend/issues"
+  },
+  "homepage": "https://github.com/itsMatoosh/ludo-backend#readme",
+  "dependencies": {
+    "express": "^4.17.1"
+  }
+}
