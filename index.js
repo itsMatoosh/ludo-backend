@@ -1,17 +1,25 @@
 const express = require('express')
 const app = express()
+var expressWs = require('express-ws')(app);
+var bodyParser = require('body-parser')
 const port = 3000
 
-var message = {
-    cock: 'balls',
-    hello: 'world'
-}
+var sqlite3 = require('sqlite3').verbose()
 
+// set up database for storing game info
+var db = new sqlite3.Database(':memory:')
+// export db
+module.exports.db = db
 
-app.get('/', (req, res) => {
-    res.send(message)
-})
+// set up body parsing
+app.use(bodyParser.json())
 
-app.listen(port, () => {
+// set up routing
+var gameManager = require('./game/game')
+app.use('/games', gameManager)
+var playerManager = require('./player/player').router
+app.use('/player', playerManager)
+
+app.listen(port, '0.0.0.0', () => {
     console.log(`LUDO backend listening at http://localhost:${port}`)
 })
