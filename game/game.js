@@ -34,7 +34,7 @@ const START_POSITIONS = [
 
 // get game info of a certain game
 async function getGameInfo(gameId) {
-    return await db.get('SELECT start_color, moves FROM game WHERE gameId = ?', [gameId])
+    return await db.get('SELECT * FROM game WHERE gameId = ?', [gameId])
 }
 
 // get board info of a certain game
@@ -69,12 +69,29 @@ async function createPlayer(gameId, playerId) {
         await createGame(gameId)
     }
 
-    // get other players and decide color
+    // check if should use ghost
+    var ghostId;
     var board = await getGameBoard(gameId)
-    var playerColor = board.length;
+    for(player of board) {
+        if(player.player < 0) {
+            // use ghost
+            ghostId = player.player
+            break
+        }
+    }
 
-    // add player to the board
-    await db.run(`INSERT INTO board (gameId, player, color) VALUES (?, ?, ?)`, [gameId, playerId, playerColor])
+    if(ghostId < 0) {
+        // assign ghost to player
+        await db.run(`UPDATE board SET player = ? WHERE player = ? AND gameId = ?`, [playerId, ghostId, gameId])
+    } else {
+        // get other players and decide color
+        var playerColor = board.length;
+
+        // add new player to the board
+        await db.run(`INSERT INTO board (gameId, player, color) VALUES (?, ?, ?)`, [gameId, playerId, playerColor])
+    }
+
+    
     console.log(`Player ${playerId} joined game ${gameId}!`)
     return playerId
 }
@@ -84,18 +101,39 @@ async function removePlayer(playerId) {
     console.log(`Player ${playerId} left the game!`)
 
     // get game which the player was playing
-    var gameId = await db.get('SELECT gameId FROM board WHERE player = ?', [playerId])
-    if(gameId != undefined) {
+    var gameId = await db.get('SELECT gameId FROM board WHERE player = ?', [playerId])?.gameId
+    var lastGhostId = -1
+    if(gameId) {
         // check if game should now be removed
         var boardInfo = await getGameBoard(gameId)
-        if(boardInfo.length <= 1) {
+        var ghosts = 0
+        for(player of boardInfo) {
+            if(player.player < 0) {
+                ghosts++
+            }
+        }
+        lastGhostId -= ghosts
+        if(ghosts >= 3) {
             // remove the empty game
             await removeGame(gameId)
         }
     }
 
-    // remove player from the board
-    await db.run(`DELETE FROM board WHERE player=?`, [playerId])
+    // change player into ghost
+    await db.run(`UPDATE board SET player = ? WHERE player=?`, [lastGhostId, playerId])
+}
+
+
+// count the number of spaces a pawn has moved from
+// its starting position till the current position
+function countMoves(color, position) {
+    var moves = 0
+    if(position < START_POSITIONS[color]) {
+        moves = position
+        moves += 52 - START_POSITIONS[color]
+    } else {
+        moves = position - START_POSITIONS[color]
+    }
 }
 
 // performs a dice roll for a player
@@ -105,9 +143,11 @@ async function doDiceRoll(gameId, playerId) {
 
     // get game info
     var gameInfo = await getGameInfo(gameId);
+    var playerPawns = await getGameBoardPlayer(gameId, playerId)
 
     // sixes rule
-    if(roll == 6) {
+    if(roll == 6 
+        && (playerPawns.p0 > -1 && playerPawns.p1 > -1 && playerPawns.p2 > -1 && playerPawns.p3 > -1)) {
         if(gameInfo.consecutiveSixes == 2) {
             // reset balance
             await db.run('UPDATE board SET balance = ? WHERE gameId = ? AND player = ?', [0, gameId, playerId])
@@ -128,8 +168,18 @@ async function doDiceRoll(gameId, playerId) {
         // reset consecutive sixes
         await db.run('UPDATE game SET consecutiveSixes = ? WHERE gameId = ?', [0, gameId])
 
-        // increase player's "balance"
-        await db.run('UPDATE board SET balance = ? WHERE gameId = ? AND player = ?', [roll, gameId, playerId])
+        // check if theres any pawns to move
+        if(playerPawns.p0 == -1 && playerPawns.p1 == -1 && playerPawns.p2 == -1 && playerPawns.p3 == -1) {
+            // no pawns can be moved
+            // skip move
+            await db.run('UPDATE game SET moves = ? WHERE gameId = ?', [gameInfo.moves + 1, gameId])
+
+            // roll 0
+            roll = 0
+        } else {
+            // increase player's "balance"
+            await db.run('UPDATE board SET balance = ? WHERE gameId = ? AND player = ?', [roll, gameId, playerId])
+        }
     }
 
     // dice roll event
@@ -160,9 +210,19 @@ async function doPawnMove(gameId, playerId, pawn, spaces) {
             return false;
         }
     } else {
-        // pawn already deployed
-        // check collsions
-        if(checkPawnCollisions(board, playerId, playerInfo[`p${pawn}`], spaces)) {
+        // get pawn position from start
+        var posFromStart = countMoves(playerInfo.color, playerInfo[`p${pawn}`])
+
+        var otherCollisionCheck = (50 - posFromStart)
+        var selfCollisionCheck = spaces - otherCollisionCheck
+        
+        // check collsions with others
+        if(checkPawnCollisions(board, playerId, playerInfo[`p${pawn}`], Math.min(spaces, otherCollisionCheck))) {
+            return false
+        }
+
+        // check collisions with self
+        if(selfCollisionCheck > 0 && checkPawnCollisionsWithSelf(board, playerInfo, playerInfo[`p${pawn}`], selfCollisionCheck)) {
             return false
         }
 
@@ -173,7 +233,19 @@ async function doPawnMove(gameId, playerId, pawn, spaces) {
             await db.run('UPDATE board SET p? = -1 WHERE gameId = ? AND player = ?', [murderInfo.pawn, gameId, playerId])
         }
 
-        playerInfo[`p${pawn}`] += spaces
+        // check goal
+        var posFromStartAfterMove = posFromStart + spaces
+        if(posFromStartAfterMove == 56) {
+            // player wins
+            playerInfo[`p${pawn}`] += spaces
+
+            // event?
+        } else if(posFromStartAfterMove > 56) {
+            // overshoot, go back to start
+            playerInfo[`p${pawn}`] = -1
+        } else {
+            playerInfo[`p${pawn}`] += spaces
+        }
     }
     await db.run('UPDATE board SET p? = ? WHERE gameId = ? AND player = ?', [pawn, playerInfo[`p${pawn}`], gameId, playerId])
 
@@ -192,6 +264,19 @@ async function checkPawnCollisions(board, playerId, position, spaces) {
                 // collision imminent
                 return true
             }
+        }
+    }
+    return false
+}
+
+// checks whether moving a pawn from position a to b causes a collision
+async function checkPawnCollisionsWithSelf(board, playerInfo, position, spaces) {
+    var endPos = position + spaces
+    for(let i = 0; i < 4; i++) {
+        var p = playerInfo[`p${i}`]
+        if(p > position && endPos > p) {
+            // collision imminent
+            return true
         }
     }
     return false
@@ -249,15 +334,24 @@ router.ws('/:id/live', async (ws, req) => {
     // check number of people in game
     var board = await getGameBoard(req.params.id)
     if(board.length > 3) {
-        ws.close(1000, 'Game full!')
-        return
+        // check if there are ghosts
+        var ghost = false
+        for(player of board) {
+            if(player.player < 0) {
+                ghost = true
+                break
+            }
+        }
+        if(ghost == false) {
+            ws.close(1000, 'Game full!')
+        }
     }
-
-    // create nickname entry for player
-    await playerManager.createNickname(req.params.id, ws._socket.remotePort, 'Anonymous')
 
     // create game entry for player
     var playerId = await createPlayer(req.params.id, ws._socket.remotePort)
+
+    // create nickname entry for player
+    await playerManager.createNickname(req.params.id, playerId, 'Anonymous')
 
     // send ready signal to player
     ws.send(`PLAYER_ID ${playerId}`)
@@ -270,8 +364,8 @@ router.ws('/:id/live', async (ws, req) => {
         gameEvent.removeListener('pawnMove', pawnEventListener)
         
         // rest
-        removePlayer(ws._socket.remotePort)
         playerManager.removeNickname(ws._socket.remotePort)
+        removePlayer(ws._socket.remotePort)
     })
 
     /// EVENTS \\\
@@ -363,7 +457,7 @@ router.post('/:id/roll', async (req, res) => {
         // not your turn
         res.status(401)
         res.send('Not your turn!')
-        console.log('Not your turn!')
+        console.log(`Not your turn! It's ${(game.start_color + game.moves - game.sixes) % 4}'s turn, and you're ${playerInfo.color}`)
     }
 })
 router.post('/:id/move', async (req, res) => {

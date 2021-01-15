@@ -15,7 +15,7 @@ async function initDB() {
 
 // gets a nickname from db
 async function getNickname(playerId) {
-    return await db.get('SELECT nickname FROM nicknames WHERE player = ?', [playerId])
+    return (await db.get('SELECT nickname FROM nicknames WHERE player = ?', [playerId]))?.nickname
 }
 
 // creates a nickname in db
@@ -33,7 +33,7 @@ async function updateNickname(gameId, playerId, nickname) {
 
 // removes a nickname from db
 async function removeNickname(playerId) {
-    var gameId = (await db.get('SELECT gameId FROM board WHERE player = ?', [playerId])).gameId
+    var gameId = (await db.get('SELECT gameId FROM board WHERE player = ?', [playerId]))?.gameId
     await db.run(`DELETE FROM nicknames WHERE player=?`, [playerId])
     nicknameChanged.emit('nicknameChanged', gameId, playerId)
 }
@@ -43,8 +43,20 @@ router.get('/nicknames', async (req, res) => {
     var names = []
     var players = await db.all('SELECT player FROM board WHERE gameId = ?', [req.params.id])
 
-    for(player of players) {
-        names.push(await getNickname(player.player))
+    for(let i = 0; i < 4; i++) {
+        if(players.length < i + 1) {
+            // placeholder
+            names.push(null)
+        } else {
+            // check ghost
+            if(players[i].player < 0) {
+                // ghost
+                names.push(null)
+            } else {
+                // real
+                names.push(await getNickname(players[i].player))
+            }
+        }
     }
     res.send(names)
 })
