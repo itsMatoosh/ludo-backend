@@ -24,8 +24,9 @@
   },
   "homepage": "https://github.com/itsMatoosh/ludo-backend#readme",
   "dependencies": {
+    "cors": "^2.8.5",
     "express": "^4.17.1",
     "express-ws": "^4.0.0",
-    "sqlite3": "^5.0.1"
+    "sqlite-async": "^1.1.1"
   }
 }
