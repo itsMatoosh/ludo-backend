@@ -134,12 +134,14 @@ function countMoves(color, position) {
     } else {
         moves = position - START_POSITIONS[color]
     }
+    return moves
 }
 
 // performs a dice roll for a player
 async function doDiceRoll(gameId, playerId) {
     // do dice roll
-    var roll = 1 + Math.round(Math.random() * 5)
+    var roll = /*1 + Math.round(Math.random() * 5)*/6
+    console.log(`Dice roll: ${roll}`)
 
     // get game info
     var gameInfo = await getGameInfo(gameId);
@@ -170,12 +172,18 @@ async function doDiceRoll(gameId, playerId) {
 
         // check if theres any pawns to move
         if(playerPawns.p0 == -1 && playerPawns.p1 == -1 && playerPawns.p2 == -1 && playerPawns.p3 == -1) {
-            // no pawns can be moved
-            // skip move
-            await db.run('UPDATE game SET moves = ? WHERE gameId = ?', [gameInfo.moves + 1, gameId])
+            // check if we can deploy pawn
+            if(roll == 6) {
+                // increase player's "balance"
+                await db.run('UPDATE board SET balance = ? WHERE gameId = ? AND player = ?', [roll, gameId, playerId])
+            } else {
+                // no pawns can be moved
+                // skip move
+                await db.run('UPDATE game SET moves = ? WHERE gameId = ?', [gameInfo.moves + 1, gameId])
 
-            // roll 0
-            roll = 0
+                // roll 0
+                roll = 0
+            }
         } else {
             // increase player's "balance"
             await db.run('UPDATE board SET balance = ? WHERE gameId = ? AND player = ?', [roll, gameId, playerId])
@@ -190,7 +198,8 @@ async function doDiceRoll(gameId, playerId) {
 // performs a pawn move for a player
 async function doPawnMove(gameId, playerId, pawn, spaces) {
     // get game information
-    var board = getGameBoard(gameId)
+    var gameInfo = await getGameInfo(gameId)
+    var board = await getGameBoard(gameId)
     var playerInfo;
     for(player of board) {
         if(player.player == playerId) {
@@ -198,39 +207,42 @@ async function doPawnMove(gameId, playerId, pawn, spaces) {
             break;
         }
     }
+    var pawnPosition = playerInfo[`p${pawn}`]
 
     // update pawn's position
-    if(playerInfo[`p${pawn}`] == -1) {
+    if(pawnPosition == -1) {
         // pawn didn't start yet
         if(spaces == 6) {
             // start pawn
             playerInfo[`p${pawn}`] = START_POSITIONS[playerInfo.color]
         } else {
             // not enough power
+            console.log('Cant move, not enough power')
             return false;
         }
     } else {
         // get pawn position from start
-        var posFromStart = countMoves(playerInfo.color, playerInfo[`p${pawn}`])
-
+        var posFromStart = countMoves(playerInfo.color, pawnPosition)
         var otherCollisionCheck = (50 - posFromStart)
         var selfCollisionCheck = spaces - otherCollisionCheck
         
         // check collsions with others
-        if(checkPawnCollisions(board, playerId, playerInfo[`p${pawn}`], Math.min(spaces, otherCollisionCheck))) {
+        if(checkPawnCollisions(board, playerId, pawnPosition, Math.min(spaces, otherCollisionCheck))) {
+            console.log('Cant move, other pawn collision')
             return false
         }
 
         // check collisions with self
-        if(selfCollisionCheck > 0 && checkPawnCollisionsWithSelf(board, playerInfo, playerInfo[`p${pawn}`], selfCollisionCheck)) {
+        if(selfCollisionCheck > 0 && checkPawnCollisionsWithSelf(board, playerInfo, pawnPosition, selfCollisionCheck)) {
+            console.log('Cant move, self pawn collision')
             return false
         }
 
         // check murder
-        var murderInfo = checkPawnMurder(board, playerId, playerInfo[`p${pawn}`], spaces)
+        var murderInfo = checkPawnMurder(board, playerId, pawnPosition, spaces)
         if(murderInfo) {
             // murdering a pawn
-            await db.run('UPDATE board SET p? = -1 WHERE gameId = ? AND player = ?', [murderInfo.pawn, gameId, playerId])
+            await db.run(`UPDATE board SET p${(await murderInfo).pawn} = -1 WHERE gameId = ? AND player = ?`, [gameId, playerId])
         }
 
         // check goal
@@ -247,7 +259,14 @@ async function doPawnMove(gameId, playerId, pawn, spaces) {
             playerInfo[`p${pawn}`] += spaces
         }
     }
-    await db.run('UPDATE board SET p? = ? WHERE gameId = ? AND player = ?', [pawn, playerInfo[`p${pawn}`], gameId, playerId])
+    // update pawn position
+    await db.run(`UPDATE board SET p${pawn} = ? WHERE gameId = ? AND player = ?`, [playerInfo[`p${pawn}`], gameId, playerId])
+    
+    // reset balance
+    await db.run('UPDATE board SET balance = ? WHERE gameId = ? AND player = ?', [0, gameId, playerId])
+
+    // skip move
+    await db.run('UPDATE game SET moves = ? WHERE gameId = ?', [gameInfo.moves + 1, gameId])
 
     // dice roll event
     gameEvent.emit('pawnMove', gameId, playerId, playerInfo.color, pawn, playerInfo[`p${pawn}`])
@@ -378,8 +397,8 @@ router.ws('/:id/live', async (ws, req) => {
     playerManager.nicknameChanged.addListener('nicknameChanged', nicknameChangedListener)
     // dice event
     var diceEventListener = (gameId, pId, roll) => {
-        if(req.params.id == gameId && playerId != pId) {
-            ws.send(`DICE_ROLL ${roll}`)
+        if(req.params.id == gameId) {
+            ws.send(`DICE_ROLL ${pId} ${roll}`)
         }
     }
     gameEvent.addListener('diceRoll', diceEventListener)
@@ -466,7 +485,7 @@ router.post('/:id/move', async (req, res) => {
     // get player id and pawn number
     var playerId = req.body.playerId
     var pawn = req.body.pawn
-    if(!playerId || !pawn) {
+    if(playerId == undefined || pawn == undefined) {
         res.status(400)
         res.send('Invalid request')
         return
@@ -512,7 +531,7 @@ router.post('/:id/move', async (req, res) => {
 
     // do move
     try {
-        var success = await doPawnMove(req.params.id, playerId, pawnm, playerInfo.balance)
+        var success = await doPawnMove(req.params.id, playerId, pawn, playerInfo.balance)
         res.send({success})
     } catch(err) {
         res.status(500)
