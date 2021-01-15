@@ -33,7 +33,7 @@ async function updateNickname(gameId, playerId, nickname) {
 
 // removes a nickname from db
 async function removeNickname(playerId) {
-    var gameId = await db.get('SELECT game FROM board WHERE player = ?', [playerId])
+    var gameId = (await db.get('SELECT gameId FROM board WHERE player = ?', [playerId])).gameId
     await db.run(`DELETE FROM nicknames WHERE player=?`, [playerId])
     nicknameChanged.emit('nicknameChanged', gameId, playerId)
 }
