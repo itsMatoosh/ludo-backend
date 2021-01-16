@@ -49,7 +49,8 @@ async function getGameBoardPlayer(gameId, playerId) {
 
 // creates a new game given id
 async function createGame(gameId) {
-    await db.run(`INSERT INTO game (gameId) VALUES (?)`, [gameId])
+    await db.run(`INSERT INTO game (gameId, start_color) VALUES (?, ?)`, [gameId, Math.round(Math.random() * 4)])
+    console.log(`New game: ${gameId} was created!`)
 }
 
 // removes a game with the specified id
@@ -58,6 +59,7 @@ async function removeGame(gameId) {
     await db.run(`DELETE FROM game WHERE gameId=?`, [gameId])
     // remove game from board
     await db.run(`DELETE FROM board WHERE gameId=?`, [gameId])
+    console.log(`Game: ${gameId} was deleted!`)
 }
 
 // creates a new player for a game
@@ -140,7 +142,7 @@ function countMoves(color, position) {
 // performs a dice roll for a player
 async function doDiceRoll(gameId, playerId) {
     // do dice roll
-    var roll = /*1 + Math.round(Math.random() * 5)*/6
+    var roll = 1 + Math.round(Math.random() * 5)
     console.log(`Dice roll: ${roll}`)
 
     // get game info
@@ -215,6 +217,13 @@ async function doPawnMove(gameId, playerId, pawn, spaces) {
         if(spaces == 6) {
             // start pawn
             playerInfo[`p${pawn}`] = START_POSITIONS[playerInfo.color]
+
+            // check murder
+            var murderInfo = checkPawnMurder(board, playerId, START_POSITIONS[playerInfo.color], 0)
+            if(murderInfo != undefined) {
+                // murdering a pawn
+                await db.run(`UPDATE board SET p${murderInfo.pawn} = -1 WHERE gameId = ? AND player = ?`, [gameId, playerId])
+            }
         } else {
             // not enough power
             console.log('Cant move, not enough power')
@@ -227,22 +236,22 @@ async function doPawnMove(gameId, playerId, pawn, spaces) {
         var selfCollisionCheck = spaces - otherCollisionCheck
         
         // check collsions with others
-        if(checkPawnCollisions(board, playerId, pawnPosition, Math.min(spaces, otherCollisionCheck))) {
+        if(checkPawnCollisions(board, playerId, pawnPosition, Math.min(spaces, otherCollisionCheck)) == true) {
             console.log('Cant move, other pawn collision')
             return false
         }
 
         // check collisions with self
-        if(selfCollisionCheck > 0 && checkPawnCollisionsWithSelf(board, playerInfo, pawnPosition, selfCollisionCheck)) {
+        if(selfCollisionCheck > 0 && checkPawnCollisionsWithSelf(board, playerInfo, pawnPosition, selfCollisionCheck) == true) {
             console.log('Cant move, self pawn collision')
             return false
         }
 
         // check murder
         var murderInfo = checkPawnMurder(board, playerId, pawnPosition, spaces)
-        if(murderInfo) {
+        if(murderInfo != undefined) {
             // murdering a pawn
-            await db.run(`UPDATE board SET p${(await murderInfo).pawn} = -1 WHERE gameId = ? AND player = ?`, [gameId, playerId])
+            await db.run(`UPDATE board SET p${murderInfo.pawn} = -1 WHERE gameId = ? AND player = ?`, [gameId, playerId])
         }
 
         // check goal
@@ -260,7 +269,7 @@ async function doPawnMove(gameId, playerId, pawn, spaces) {
         }
     }
     // update pawn position
-    await db.run(`UPDATE board SET p${pawn} = ? WHERE gameId = ? AND player = ?`, [playerInfo[`p${pawn}`], gameId, playerId])
+    await db.run(`UPDATE board SET p${pawn} = ? WHERE gameId = ? AND player = ?`, [playerInfo[`p${pawn}`] % 52, gameId, playerId])
     
     // reset balance
     await db.run('UPDATE board SET balance = ? WHERE gameId = ? AND player = ?', [0, gameId, playerId])
@@ -279,7 +288,7 @@ async function checkPawnCollisions(board, playerId, position, spaces) {
         if(player.player == playerId) continue
         for(let i = 0; i < 4; i++) {
             var p = player[`p${i}`]
-            if(p > position && endPos > p) {
+            if(p > position && p < endPos) {
                 // collision imminent
                 return true
             }
@@ -289,7 +298,7 @@ async function checkPawnCollisions(board, playerId, position, spaces) {
 }
 
 // checks whether moving a pawn from position a to b causes a collision
-async function checkPawnCollisionsWithSelf(board, playerInfo, position, spaces) {
+function checkPawnCollisionsWithSelf(board, playerInfo, position, spaces) {
     var endPos = position + spaces
     for(let i = 0; i < 4; i++) {
         var p = playerInfo[`p${i}`]
@@ -302,7 +311,7 @@ async function checkPawnCollisionsWithSelf(board, playerInfo, position, spaces) 
 }
 
 // checks whether moving a pawn from position a to b will murder
-async function checkPawnMurder(board, playerId, position, spaces) {
+function checkPawnMurder(board, playerId, position, spaces) {
     var endPos = position + spaces
     for(player of board) {
         if(player.player == playerId) continue
@@ -539,11 +548,23 @@ router.post('/:id/move', async (req, res) => {
         console.error('Error doing dice roll!', err)
     }
 })
+router.post('/:id/color', async (req, res) => {
+    // return info about a player's color
+    try {
+        var playerInfo = await getGameBoardPlayer(req.params.id, req.body.playerId)
+        res.send({
+            color: playerInfo.color
+        })
+    } catch (err) {
+        res.status(500)
+        res.send('Error getting player color!')
+        console.error('Error gettimng player color!', err)
+    }
+})
 router.post('/', (req, res) => {
     // generate a new game id
     var gameId = generateUniqueGameId()
-    console.log(`New game: ${gameId} was created!`)
-    res.send({gameId: gameId})
+    res.send({gameId})
 })
 
 // player subsection
