@@ -100,3 +100,4 @@ module.exports.router = router
 module.exports.nicknameChanged = nicknameChanged
 module.exports.removeNickname = removeNickname
 module.exports.createNickname = createNickname
+module.exports.getNickname = getNickname
